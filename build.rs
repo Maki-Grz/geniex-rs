@@ -27,14 +27,15 @@ fn main() {
             .into_iter()
             .find(|p| p.exists())
             .unwrap_or_else(|| {
+                println!(
+                    "cargo:warning=ERROR: Could not locate required C header file 'geniex.h'.\n\
+                     cargo:warning=To resolve this:\n\
+                     cargo:warning=  1. Ensure 'vendor/include/geniex.h' exists, OR\n\
+                     cargo:warning=  2. Set CARGO_GENIEX_INCLUDE_DIR to point to 'geniex.h' or its directory.\n\
+                     cargo:warning=Upstream GenieX C SDK: https://github.com/qualcomm/GenieX/releases"
+                );
                 panic!(
-                    "\n\n================================================================================\n\
-                    ERROR: Could not locate required C header file 'geniex.h'.\n\n\
-                    To resolve this:\n\
-                    1. Place 'geniex.h' in the 'vendor/include/' directory of geniex-rs, OR\n\
-                    2. Set the environment variable CARGO_GENIEX_INCLUDE_DIR to point to 'geniex.h'.\n\n\
-                    Upstream GenieX C SDK: https://github.com/qualcomm/GenieX/releases\n\
-                    ================================================================================\n\n"
+                    "Missing required C header file 'geniex.h'. Please set CARGO_GENIEX_INCLUDE_DIR."
                 )
             })
     };
