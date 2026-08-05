@@ -307,7 +307,7 @@ typedef struct {
  *
  * `warning` is non-NULL when the alias was coerced (e.g. qairt only has
  * an NPU device, so cpu/gpu/hybrid fall back to NPU with a warning).
- * Callers should surface the warning and continue - geniex_resolve_device
+ * Callers should surface the warning and continue — geniex_resolve_device
  * never returns an error for coerced modes.
  *
  * An error (GENIEX_ERROR_COMMON_INVALID_DEVICE) is returned only when
@@ -359,6 +359,9 @@ typedef struct {
     double prefill_speed;    /* Prefill speed (tokens/sec) */
     double decoding_speed;   /* Decoding speed (tokens/sec) */
     double real_time_factor; /* Real-Time Factor(RTF) (1.0 = real-time, >1.0 = faster, <1.0 = slower) */
+
+    int64_t draft_n_total;    /* Speculative decoding: draft tokens generated (0 when disabled) */
+    int64_t draft_n_accepted; /* Speculative decoding: draft tokens accepted by the target model */
 
     const char* stop_reason; /* Stop reason: "eos", "length", "user", "stop_sequence", "context_length" */
 } geniex_ProfileData;
@@ -422,6 +425,18 @@ typedef struct {
     int32_t     max_tokens;             // max tokens to generate
     bool        enable_thinking;        // enable thinking mode for Qwen models
     bool        verbose;                // verbose logging
+
+    // Speculative decoding (llama_cpp only; ignored by qairt). Disabled when
+    // spec_type is NULL/""/"none". One or comma-separated llama.cpp type names,
+    // chained by llama.cpp's fixed priority:
+    //   draft models: "draft-mtp", "draft-eagle3", "draft-simple" (need spec_draft_model)
+    //   self-speculative (no draft model): "ngram-simple", "ngram-map-k",
+    //     "ngram-map-k4v", "ngram-mod", "ngram-cache"
+    const char* spec_type;         // speculative type(s), "" / "none" = disabled
+    geniex_Path spec_draft_model;  // draft GGUF for draft-* types ("" for ngram-*)
+    int32_t     spec_n_max;        // max draft tokens per step (0 = plugin default of 3)
+    int32_t     spec_n_min;        // min draft tokens per step (0 = llama.cpp default)
+    float       spec_p_min;        // min greedy draft probability (0 = llama.cpp default)
 } geniex_ModelConfig;
 
 /* ====================  LLM Handle  ======================================== */
@@ -604,6 +619,62 @@ typedef struct {
  *                                             as a hard failure.
  */
 GENIEX_API int32_t geniex_llm_get_model_info(geniex_LLM* handle, geniex_LlmModelInfo* output);
+
+/* ====================  Forward Logits  =================================== */
+
+/** Input for a single non-autoregressive forward pass over pre-tokenized input.
+ *
+ * The caller owns any special tokens (BOS/EOS); none are added automatically,
+ * matching geniex_LlmGenerateInput's input_ids contract. */
+typedef struct {
+    const int32_t* input_ids;       /** Pre-tokenized token IDs (non-NULL). */
+    int32_t        input_ids_count; /** Token count (>= 1). */
+    bool           all_positions;   /** false: last token's row only. true: every position. */
+    int32_t        top_n;           /** 0: full vocab per row. >0: keep only the top-N logits per row. */
+} geniex_LlmForwardLogitsInput;
+
+/** Output of geniex_llm_forward_logits. Zero-initialized by the bridge before
+ *  the plugin populates it.
+ *
+ *  Row-major [n_rows, row_width]. When top_n == 0 the columns are the full
+ *  vocabulary (row_width == vocab_size) and token_ids is NULL — column index is
+ *  the token id. When top_n > 0 each row holds its top row_width logits sorted
+ *  descending, and token_ids[r * row_width + c] is the corresponding token id. */
+typedef struct {
+    float*   logits;     /** Caller frees with geniex_free. */
+    int32_t* token_ids;  /** NULL when top_n == 0; else [n_rows, row_width]; caller frees with geniex_free. */
+    int32_t  n_rows;     /** all_positions ? input_ids_count : 1. */
+    int32_t  row_width;  /** top_n > 0 ? min(top_n, vocab_size) : vocab_size. */
+    int32_t  vocab_size; /** Full vocabulary size, regardless of top_n. */
+} geniex_LlmForwardLogitsOutput;
+
+/**
+ * @brief Run a single forward pass and return raw logits (no sampling, no decode loop).
+ *
+ * Runs the prefill path against a fresh KV cache and reads the LM-head output
+ * directly, for on-target accuracy metrics (perplexity, MMLU, MMMU) that score
+ * logits rather than generate text. Does not disturb geniex_llm_generate's
+ * sampler/KV state. Not all plugins support this; those that don't return
+ * GENIEX_ERROR_COMMON_PARAM_NOT_SUPPORTED.
+ *
+ * With input->top_n > 0 the raw per-row logits are reduced to their top-N (by
+ * descending logit) before returning: output->logits and output->token_ids are
+ * both [n_rows, row_width] and row_width == min(top_n, vocab_size). This keeps
+ * all-positions output small (full vocab per row is hundreds of MB).
+ *
+ * @param handle[in]:  LLM handle.
+ * @param input[in]:   Pre-tokenized input and the all_positions flag.
+ * @param output[out]: Filled-in logits buffer (caller frees output->logits with geniex_free).
+ *
+ * @return geniex_ErrorCode:
+ *   - GENIEX_SUCCESS                              on success.
+ *   - GENIEX_ERROR_COMMON_NOT_INITIALIZED         when handle is NULL / model not ready.
+ *   - GENIEX_ERROR_COMMON_INVALID_INPUT           when input/output is NULL or input_ids is empty.
+ *   - GENIEX_ERROR_COMMON_PARAM_NOT_SUPPORTED     when the plugin cannot produce logits.
+ *   - GENIEX_ERROR_LLM_TOKENIZATION_CONTEXT_LENGTH when input_ids exceeds the max context length.
+ */
+GENIEX_API int32_t geniex_llm_forward_logits(
+    geniex_LLM* handle, const geniex_LlmForwardLogitsInput* input, geniex_LlmForwardLogitsOutput* output);
 
 /* ========================================================================== */
 /*                              MULTIMODAL MODELS (VLM)                          */

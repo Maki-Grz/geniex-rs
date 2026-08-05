@@ -279,6 +279,11 @@ pub struct ModelConfig {
     pub enable_thinking: bool,
     /// Enable verbose SDK log output.
     pub verbose: bool,
+    pub spec_type: Option<String>,
+    pub spec_draft_model: Option<String>,
+    pub spec_n_max: i32,
+    pub spec_n_min: i32,
+    pub spec_p_min: f32,
 }
 
 pub(crate) struct RawModelConfig {
@@ -287,6 +292,8 @@ pub(crate) struct RawModelConfig {
     _chat_template_content: Option<CString>,
     _system_prompt: Option<CString>,
     _grammar_str: Option<CString>,
+    _spec_type: Option<CString>,
+    _spec_draft_model: Option<CString>,
 }
 
 impl ModelConfig {
@@ -298,6 +305,8 @@ impl ModelConfig {
             .map(|s| safe_c_string(s));
         let system_prompt_c = self.system_prompt.as_ref().map(|s| safe_c_string(s));
         let grammar_str_c = self.grammar_str.as_ref().map(|s| safe_c_string(s));
+        let spec_type_c = self.spec_type.as_ref().map(|s| safe_c_string(s));
+        let spec_draft_model_c = self.spec_draft_model.as_ref().map(|s| safe_c_string(s));
 
         let raw = ffi::geniex_ModelConfig {
             n_ctx: self.n_ctx,
@@ -323,6 +332,15 @@ impl ModelConfig {
             max_tokens: self.max_tokens,
             enable_thinking: self.enable_thinking,
             verbose: self.verbose,
+            spec_type: spec_type_c
+                .as_ref()
+                .map_or(std::ptr::null(), |s| s.as_ptr()),
+            spec_draft_model: spec_draft_model_c
+                .as_ref()
+                .map_or(std::ptr::null(), |s| s.as_ptr()),
+            spec_n_max: self.spec_n_max,
+            spec_n_min: self.spec_n_min,
+            spec_p_min: self.spec_p_min,
         };
 
         RawModelConfig {
@@ -331,6 +349,8 @@ impl ModelConfig {
             _chat_template_content: chat_template_content_c,
             _system_prompt: system_prompt_c,
             _grammar_str: grammar_str_c,
+            _spec_type: spec_type_c,
+            _spec_draft_model: spec_draft_model_c,
         }
     }
 }
