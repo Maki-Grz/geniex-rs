@@ -1,0 +1,16 @@
+# 1. Mettre à jour les dépendances
+cargo update
+
+# 2. Commiter les changements
+git add .
+git commit -m "chore: update bindings to support new speculative decoding API fields"
+
+# 3. Pousser les changements vers le dépôt principal
+git push origin main
+
+# 4. Créer et pousser le tag de release
+git tag -a v0.1.2 -m "Release v0.1.2"
+git push origin v0.1.2
+
+# 5. Publier sur crates.io
+cargo publish

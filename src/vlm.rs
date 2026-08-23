@@ -21,16 +21,12 @@ impl Vlm {
         model_path: &str,
         plugin_id: &str,
         config: &ModelConfig,
-        model_name: Option<&str>,
         mmproj_path: Option<&str>,
         tokenizer_path: Option<&str>,
         device_id: Option<&str>,
     ) -> Result<Self> {
         let c_model_path = CString::new(model_path).map_err(|_| GeniexError::CommonInvalidInput)?;
         let c_plugin_id = CString::new(plugin_id).map_err(|_| GeniexError::CommonInvalidInput)?;
-        let c_model_name = model_name
-            .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
-            .transpose()?;
         let c_mmproj_path = mmproj_path
             .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
             .transpose()?;
@@ -44,7 +40,6 @@ impl Vlm {
         let raw_config = config.to_raw();
 
         let raw_input = ffi::geniex_VlmCreateInput {
-            model_name: c_model_name.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
             model_path: c_model_path.as_ptr(),
             mmproj_path: c_mmproj_path.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
             config: raw_config.raw,
@@ -202,6 +197,70 @@ impl Vlm {
     pub fn raw_handle(&self) -> *mut ffi::geniex_VLM {
         self.handle
     }
+
+    /// Generates response tokens asynchronously for multimodal input, yielding strings via an Iterator.
+    ///
+    /// Dropping the returned Iterator cancels token generation early inside the C engine.
+    pub fn generate_iter(
+        &mut self,
+        prompt: &str,
+        config: Option<&GenerationConfig>,
+    ) -> VlmIterator<'_> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let c_prompt = prompt.to_string();
+        let owned_config = config.cloned();
+        let raw_handle = self.handle as usize;
+
+        std::thread::spawn(move || {
+            let c_prompt_c = match CString::new(c_prompt) {
+                Ok(cs) => cs,
+                Err(_) => {
+                    let _ = tx.send(Err(GeniexError::CommonInvalidInput));
+                    return;
+                }
+            };
+
+            let raw_config = owned_config.as_ref().map(|c| c.to_raw());
+            let user_data = Box::into_raw(Box::new(tx));
+
+            extern "C" fn token_callback(
+                token: *const c_char,
+                user_data: *mut c_void,
+            ) -> bool {
+                if token.is_null() || user_data.is_null() {
+                    return true;
+                }
+                let tx = unsafe { &*(user_data as *const std::sync::mpsc::Sender<Result<String>>) };
+                let s = unsafe { CStr::from_ptr(token).to_string_lossy().into_owned() };
+                tx.send(Ok(s)).is_ok()
+            }
+
+            let input = ffi::geniex_VlmGenerateInput {
+                prompt_utf8: c_prompt_c.as_ptr(),
+                config: raw_config.as_ref().map_or(ptr::null(), |c| &c.raw),
+                on_token: Some(token_callback),
+                user_data: user_data as *mut c_void,
+            };
+
+            let mut output = ffi::geniex_VlmGenerateOutput {
+                full_text: ptr::null_mut(),
+                profile_data: unsafe { std::mem::zeroed() },
+            };
+
+            let code = unsafe { ffi::geniex_vlm_generate(raw_handle as *mut ffi::geniex_VLM, &input, &mut output) };
+            let tx = unsafe { Box::from_raw(user_data) };
+
+            if let Err(e) = GeniexError::check(code) {
+                let _ = tx.send(Err(e));
+            }
+
+            if !output.full_text.is_null() {
+                unsafe { ffi::geniex_free(output.full_text as *mut _) };
+            }
+        });
+
+        VlmIterator { _vlm: self, rx }
+    }
 }
 
 impl Drop for Vlm {
@@ -212,5 +271,19 @@ impl Drop for Vlm {
                 ffi::geniex_vlm_destroy(self.handle);
             }
         }
+    }
+}
+
+/// Iterator yielding generated text tokens from the VLM.
+pub struct VlmIterator<'a> {
+    _vlm: &'a mut Vlm,
+    rx: std::sync::mpsc::Receiver<Result<String>>,
+}
+
+impl<'a> Iterator for VlmIterator<'a> {
+    type Item = Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rx.recv().ok()
     }
 }

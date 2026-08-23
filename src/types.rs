@@ -21,24 +21,26 @@ pub enum LogLevel {
 /// Performance and timing telemetry data captured during generation.
 #[derive(Debug, Clone, Default)]
 pub struct ProfileData {
-    /// Time to first token in milliseconds.
+    /// Time to first token in microseconds.
     pub ttft: i64,
-    /// Total prompt processing time in milliseconds.
+    /// Image/audio encoder time in microseconds; 0 for text-only runs.
+    pub media_time: i64,
+    /// Prefill time in microseconds (includes media-token prefill, excludes encoder).
     pub prompt_time: i64,
-    /// Total decoding time in milliseconds.
+    /// Total decoding time in microseconds.
     pub decode_time: i64,
-    /// Number of prompt tokens processed.
+    /// Number of prompt tokens processed (text + media tokens).
     pub prompt_tokens: i64,
     /// Number of generated tokens produced.
     pub generated_tokens: i64,
-    /// Total audio processing duration in milliseconds.
-    pub audio_duration: i64,
     /// Prefill speed in tokens per second.
     pub prefill_speed: f64,
     /// Decoding speed in tokens per second.
     pub decoding_speed: f64,
-    /// Real-time factor for audio/multimodal execution.
-    pub real_time_factor: f64,
+    /// Speculative decoding: draft tokens generated (0 when disabled).
+    pub draft_n_total: i64,
+    /// Speculative decoding: draft tokens accepted by the target model.
+    pub draft_n_accepted: i64,
     /// Reason generation stopped (e.g., "eos", "length").
     pub stop_reason: String,
 }
@@ -57,14 +59,15 @@ impl From<&ffi::geniex_ProfileData> for ProfileData {
         };
         Self {
             ttft: raw.ttft,
+            media_time: raw.media_time,
             prompt_time: raw.prompt_time,
             decode_time: raw.decode_time,
             prompt_tokens: raw.prompt_tokens,
             generated_tokens: raw.generated_tokens,
-            audio_duration: raw.audio_duration,
             prefill_speed: raw.prefill_speed,
             decoding_speed: raw.decoding_speed,
-            real_time_factor: raw.real_time_factor,
+            draft_n_total: raw.draft_n_total,
+            draft_n_accepted: raw.draft_n_accepted,
             stop_reason,
         }
     }
@@ -93,8 +96,6 @@ pub struct SamplerConfig {
     pub grammar_path: Option<String>,
     /// Optional raw GBNF grammar string.
     pub grammar_string: Option<String>,
-    /// Enable strict JSON output schema constraint.
-    pub enable_json: bool,
 }
 
 impl Default for SamplerConfig {
@@ -110,7 +111,6 @@ impl Default for SamplerConfig {
             seed: -1,
             grammar_path: None,
             grammar_string: None,
-            enable_json: false,
         }
     }
 }
@@ -145,7 +145,6 @@ impl SamplerConfig {
             grammar_string: grammar_string_c
                 .as_ref()
                 .map_or(std::ptr::null(), |s| s.as_ptr()),
-            enable_json: self.enable_json,
         };
 
         RawSamplerConfig {
@@ -163,14 +162,10 @@ pub struct GenerationConfig {
     pub max_tokens: i32,
     /// List of stop sequence strings.
     pub stop: Vec<String>,
-    /// Number of past tokens stored in KV cache context.
-    pub n_past: i32,
     /// Optional sampler settings.
     pub sampler_config: Option<SamplerConfig>,
     /// Paths to image inputs for multimodal generation.
     pub image_paths: Vec<String>,
-    /// Maximum length dimension for image resizing.
-    pub image_max_length: i32,
     /// Paths to audio inputs for multimodal generation.
     pub audio_paths: Vec<String>,
     /// Enable sliding window context attention.
@@ -214,7 +209,6 @@ impl GenerationConfig {
                 stop_ptrs.as_ptr() as *mut *const c_char
             },
             stop_count: stop_ptrs.len() as i32,
-            n_past: self.n_past,
             sampler_config: sampler_ptr,
             image_paths: if image_path_ptrs.is_empty() {
                 std::ptr::null_mut()
@@ -222,7 +216,6 @@ impl GenerationConfig {
                 image_path_ptrs.as_ptr() as *mut *const c_char
             },
             image_count: image_path_ptrs.len() as i32,
-            image_max_length: self.image_max_length,
             audio_paths: if audio_path_ptrs.is_empty() {
                 std::ptr::null_mut()
             } else {
@@ -267,18 +260,6 @@ pub struct ModelConfig {
     pub chat_template_path: Option<String>,
     /// Raw Jinja chat template content string.
     pub chat_template_content: Option<String>,
-    /// Default system prompt.
-    pub system_prompt: Option<String>,
-    /// Enable sampling during generation.
-    pub enable_sampling: bool,
-    /// Grammar format string.
-    pub grammar_str: Option<String>,
-    /// Maximum default tokens.
-    pub max_tokens: i32,
-    /// Enable model thinking/reasoning outputs if supported.
-    pub enable_thinking: bool,
-    /// Enable verbose SDK log output.
-    pub verbose: bool,
     pub spec_type: Option<String>,
     pub spec_draft_model: Option<String>,
     pub spec_n_max: i32,
@@ -290,8 +271,6 @@ pub(crate) struct RawModelConfig {
     pub raw: ffi::geniex_ModelConfig,
     _chat_template_path: Option<CString>,
     _chat_template_content: Option<CString>,
-    _system_prompt: Option<CString>,
-    _grammar_str: Option<CString>,
     _spec_type: Option<CString>,
     _spec_draft_model: Option<CString>,
 }
@@ -303,8 +282,6 @@ impl ModelConfig {
             .chat_template_content
             .as_ref()
             .map(|s| safe_c_string(s));
-        let system_prompt_c = self.system_prompt.as_ref().map(|s| safe_c_string(s));
-        let grammar_str_c = self.grammar_str.as_ref().map(|s| safe_c_string(s));
         let spec_type_c = self.spec_type.as_ref().map(|s| safe_c_string(s));
         let spec_draft_model_c = self.spec_draft_model.as_ref().map(|s| safe_c_string(s));
 
@@ -322,16 +299,6 @@ impl ModelConfig {
             chat_template_content: chat_template_content_c
                 .as_ref()
                 .map_or(std::ptr::null(), |s| s.as_ptr()),
-            system_prompt: system_prompt_c
-                .as_ref()
-                .map_or(std::ptr::null(), |s| s.as_ptr()),
-            enable_sampling: self.enable_sampling,
-            grammar_str: grammar_str_c
-                .as_ref()
-                .map_or(std::ptr::null(), |s| s.as_ptr()),
-            max_tokens: self.max_tokens,
-            enable_thinking: self.enable_thinking,
-            verbose: self.verbose,
             spec_type: spec_type_c
                 .as_ref()
                 .map_or(std::ptr::null(), |s| s.as_ptr()),
@@ -347,8 +314,6 @@ impl ModelConfig {
             raw,
             _chat_template_path: chat_template_path_c,
             _chat_template_content: chat_template_content_c,
-            _system_prompt: system_prompt_c,
-            _grammar_str: grammar_str_c,
             _spec_type: spec_type_c,
             _spec_draft_model: spec_draft_model_c,
         }
@@ -542,4 +507,34 @@ pub struct DeviceList {
     pub device_ids: Vec<String>,
     /// Human-readable device names.
     pub device_names: Vec<String>,
+}
+
+/// Strongly typed media content for Vision-Language Models (VLM).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VlmMedia {
+    /// Plain text payload.
+    Text(String),
+    /// File path to an input image.
+    Image(std::path::PathBuf),
+    /// File path to an input audio recording.
+    Audio(std::path::PathBuf),
+}
+
+impl From<VlmMedia> for VlmContent {
+    fn from(media: VlmMedia) -> Self {
+        match media {
+            VlmMedia::Text(t) => VlmContent {
+                r#type: "text".to_string(),
+                text: t,
+            },
+            VlmMedia::Image(p) => VlmContent {
+                r#type: "image".to_string(),
+                text: p.to_string_lossy().into_owned(),
+            },
+            VlmMedia::Audio(p) => VlmContent {
+                r#type: "audio".to_string(),
+                text: p.to_string_lossy().into_owned(),
+            },
+        }
+    }
 }

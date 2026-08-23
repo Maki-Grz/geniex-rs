@@ -69,7 +69,7 @@ fn main() -> Result<()> {
         println!("\n[+] Loading LLM model from: {}", path_str);
 
         let config = ModelConfig::default();
-        let mut llm = Llm::create(path_str, "llama_cpp", &config, None, None, None)?;
+        let mut llm = Llm::create(path_str, "llama_cpp", &config, None, None)?;
 
         let messages = vec![ChatMessage {
             role: "user".to_string(),

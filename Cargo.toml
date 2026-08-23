@@ -1,6 +1,6 @@
 [package]
 name = "geniex-rs"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Safe, idiomatic Rust bindings for the Qualcomm GenieX C API (LLM & VLM inference runtime on Snapdragon)"
 license = "BSD-3-Clause"

@@ -1,4 +1,4 @@
-//! # `geniex` — Rust Bindings for Qualcomm GenieX C API
+//! # `geniex` - Rust Bindings for Qualcomm GenieX C API
 //!
 //! Safe, high-level, idiomatic Rust wrappers for Qualcomm GenieX Large Language Model (LLM)
 //! and Vision-Language Model (VLM) inference engines.
@@ -17,6 +17,6 @@ pub mod vlm;
 
 pub use core::*;
 pub use error::{GeniexError, Result};
-pub use llm::Llm;
+pub use llm::{Llm, LlmIterator, ChatSession, ChatIterator};
 pub use types::*;
-pub use vlm::Vlm;
+pub use vlm::{Vlm, VlmIterator};
