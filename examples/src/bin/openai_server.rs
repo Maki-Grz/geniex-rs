@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use geniex::*;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::env;
@@ -11,7 +12,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
-use geniex::*;
 
 #[derive(Deserialize, Debug)]
 struct ChatCompletionRequest {
@@ -82,7 +82,9 @@ async fn main() -> Result<()> {
     let llm = Llm::create(model_path, "llama_cpp", &config, None, None)?;
     println!("[+] LLM model loaded successfully.");
 
-    let state = Arc::new(AppState { llm: Mutex::new(llm) });
+    let state = Arc::new(AppState {
+        llm: Mutex::new(llm),
+    });
 
     let app = Router::new()
         .route("/v1/models", get(list_models))
@@ -114,10 +116,7 @@ async fn list_models() -> Json<ModelList> {
 async fn chat_completions(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatCompletionRequest>,
-) -> std::result::Result<
-    axum::response::Response,
-    (axum::http::StatusCode, String),
-> {
+) -> std::result::Result<axum::response::Response, (axum::http::StatusCode, String)> {
     use axum::response::IntoResponse;
 
     let messages: Vec<ChatMessage> = payload
@@ -138,14 +137,15 @@ async fn chat_completions(
             let tx_clone = tx.clone();
             tokio::task::spawn_blocking(move || {
                 let mut llm = state_clone.llm.blocking_lock();
-                
-                let formatted = match llm.apply_chat_template(&messages, None, enable_thinking, true) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        let _ = tx_clone.blocking_send(Err(e));
-                        return;
-                    }
-                };
+
+                let formatted =
+                    match llm.apply_chat_template(&messages, None, enable_thinking, true) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let _ = tx_clone.blocking_send(Err(e));
+                            return;
+                        }
+                    };
 
                 let iter = llm.generate_iter(Some(&formatted), None, None);
                 for token_res in iter {
@@ -153,7 +153,9 @@ async fn chat_completions(
                         break;
                     }
                 }
-            }).await.unwrap();
+            })
+            .await
+            .unwrap();
         });
 
         let sse_stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(

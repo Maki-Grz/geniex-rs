@@ -17,6 +17,6 @@ pub mod vlm;
 
 pub use core::*;
 pub use error::{GeniexError, Result};
-pub use llm::{Llm, LlmIterator, ChatSession, ChatIterator};
+pub use llm::{ChatIterator, ChatSession, Llm, LlmIterator};
 pub use types::*;
 pub use vlm::{Vlm, VlmIterator};

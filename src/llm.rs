@@ -251,7 +251,7 @@ impl Llm {
             let c_prompt_str = c_prompt
                 .as_ref()
                 .map(|s| CString::new(s.as_str()).map_err(|_| GeniexError::CommonInvalidInput));
-            
+
             let c_prompt_c = match c_prompt_str {
                 Some(Ok(cs)) => Some(cs),
                 Some(Err(e)) => {
@@ -264,10 +264,7 @@ impl Llm {
             let raw_config = owned_config.as_ref().map(|c| c.to_raw());
             let user_data = Box::into_raw(Box::new(tx));
 
-            extern "C" fn token_callback(
-                token: *const c_char,
-                user_data: *mut c_void,
-            ) -> bool {
+            extern "C" fn token_callback(token: *const c_char, user_data: *mut c_void) -> bool {
                 if token.is_null() || user_data.is_null() {
                     return true;
                 }
@@ -296,7 +293,9 @@ impl Llm {
                 profile_data: unsafe { std::mem::zeroed() },
             };
 
-            let code = unsafe { ffi::geniex_llm_generate(raw_handle as *mut ffi::geniex_LLM, &input, &mut output) };
+            let code = unsafe {
+                ffi::geniex_llm_generate(raw_handle as *mut ffi::geniex_LLM, &input, &mut output)
+            };
             let tx = unsafe { Box::from_raw(user_data) };
 
             if let Err(e) = GeniexError::check(code) {
@@ -378,15 +377,14 @@ impl<'a> ChatSession<'a> {
         config: Option<&GenerationConfig>,
     ) -> Result<String> {
         self.push_message("user", prompt);
-        let formatted = self.llm.apply_chat_template(&self.history, None, enable_thinking, true)?;
-        
-        let (response, _) = self.llm.generate::<fn(&str) -> bool>(
-            Some(&formatted),
-            None,
-            config,
-            None,
-        )?;
-        
+        let formatted = self
+            .llm
+            .apply_chat_template(&self.history, None, enable_thinking, true)?;
+
+        let (response, _) =
+            self.llm
+                .generate::<fn(&str) -> bool>(Some(&formatted), None, config, None)?;
+
         self.push_message("assistant", &response);
         Ok(response)
     }
@@ -399,11 +397,13 @@ impl<'a> ChatSession<'a> {
         config: Option<&GenerationConfig>,
     ) -> Result<ChatIterator<'a, '_>> {
         self.push_message("user", prompt);
-        let formatted = self.llm.apply_chat_template(&self.history, None, enable_thinking, true)?;
-        
+        let formatted = self
+            .llm
+            .apply_chat_template(&self.history, None, enable_thinking, true)?;
+
         let (tx, rx) = std::sync::mpsc::channel();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        
+
         let raw_handle = self.llm.handle as usize;
         let c_prompt = CString::new(formatted).map_err(|_| GeniexError::CommonInvalidInput)?;
         let owned_config = config.cloned();
@@ -412,10 +412,7 @@ impl<'a> ChatSession<'a> {
             let raw_config = owned_config.as_ref().map(|c| c.to_raw());
             let user_data = Box::into_raw(Box::new(tx));
 
-            extern "C" fn token_callback(
-                token: *const c_char,
-                user_data: *mut c_void,
-            ) -> bool {
+            extern "C" fn token_callback(token: *const c_char, user_data: *mut c_void) -> bool {
                 if token.is_null() || user_data.is_null() {
                     return true;
                 }
@@ -438,11 +435,17 @@ impl<'a> ChatSession<'a> {
                 profile_data: unsafe { std::mem::zeroed() },
             };
 
-            let code = unsafe { ffi::geniex_llm_generate(raw_handle as *mut ffi::geniex_LLM, &input, &mut output) };
+            let code = unsafe {
+                ffi::geniex_llm_generate(raw_handle as *mut ffi::geniex_LLM, &input, &mut output)
+            };
             let tx = unsafe { Box::from_raw(user_data) };
 
             let full_text = if !output.full_text.is_null() {
-                let s = unsafe { CStr::from_ptr(output.full_text).to_string_lossy().into_owned() };
+                let s = unsafe {
+                    CStr::from_ptr(output.full_text)
+                        .to_string_lossy()
+                        .into_owned()
+                };
                 unsafe { ffi::geniex_free(output.full_text as *mut _) };
                 s
             } else {
@@ -501,7 +504,9 @@ impl<'a, 'b> Iterator for ChatIterator<'a, 'b> {
 impl<'a, 'b> Drop for ChatIterator<'a, 'b> {
     fn drop(&mut self) {
         if let Some(done_rx) = self.done_rx.take() {
-            let final_text = done_rx.try_recv().unwrap_or_else(|_| std::mem::take(&mut self.acc));
+            let final_text = done_rx
+                .try_recv()
+                .unwrap_or_else(|_| std::mem::take(&mut self.acc));
             if !final_text.is_empty() {
                 self.session.push_message("assistant", &final_text);
             }

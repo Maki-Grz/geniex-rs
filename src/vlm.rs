@@ -223,10 +223,7 @@ impl Vlm {
             let raw_config = owned_config.as_ref().map(|c| c.to_raw());
             let user_data = Box::into_raw(Box::new(tx));
 
-            extern "C" fn token_callback(
-                token: *const c_char,
-                user_data: *mut c_void,
-            ) -> bool {
+            extern "C" fn token_callback(token: *const c_char, user_data: *mut c_void) -> bool {
                 if token.is_null() || user_data.is_null() {
                     return true;
                 }
@@ -247,7 +244,9 @@ impl Vlm {
                 profile_data: unsafe { std::mem::zeroed() },
             };
 
-            let code = unsafe { ffi::geniex_vlm_generate(raw_handle as *mut ffi::geniex_VLM, &input, &mut output) };
+            let code = unsafe {
+                ffi::geniex_vlm_generate(raw_handle as *mut ffi::geniex_VLM, &input, &mut output)
+            };
             let tx = unsafe { Box::from_raw(user_data) };
 
             if let Err(e) = GeniexError::check(code) {
