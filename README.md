@@ -1,4 +1,4 @@
-# geniex-rs — Rust Bindings for Qualcomm GenieX
+# geniex-rs - Rust Bindings for Qualcomm GenieX
 
 > ⚠️ **Disclaimer / Community Notice**: `geniex-rs` is an open-source, community-maintained Rust binding for Qualcomm's GenieX C API. It is not an officially maintained product of Qualcomm Technologies, Inc. For official documentation and C/C++ runtime releases, visit [qualcomm/GenieX on GitHub](https://github.com/qualcomm/GenieX).
 
@@ -28,10 +28,10 @@
 
 ## 🌟 Overview
 
-GenieX is an **on-device Gen AI inference runtime for Qualcomm devices**. `geniex-rs` provides safe, idiomatic, high-level Rust wrappers for the **GenieX** C API (`geniex.h`). Bring almost any GGUF model from Hugging Face — or a pre-compiled bundle from [Qualcomm AI Hub](https://aihub.qualcomm.com/models/) — and run it locally in Rust on the **Hexagon NPU, Adreno GPU, or CPU** in a few lines of code.
+GenieX is an **on-device Gen AI inference runtime for Qualcomm devices**. `geniex-rs` provides safe, idiomatic, high-level Rust wrappers for the **GenieX** C API (`geniex.h`). Bring almost any GGUF model from Hugging Face - or a pre-compiled bundle from [Qualcomm AI Hub](https://aihub.qualcomm.com/models/) - and run it locally in Rust on the **Hexagon NPU, Adreno GPU, or CPU** in a few lines of code.
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/qualcomm/GenieX/main/docs/Mintlify-image/geniex_arch_v2.png" width="820" alt="GenieX architecture: Rust bindings, CLI, Python, Java, Docker, and OpenAI-compatible Serve interfaces sit on a single GenieX SDK, which dispatches to the llama.cpp runtime (GGML over CPU / GPU / Hexagon HTP kernels) or the Qualcomm AI Engine Direct runtime on the NPU — across Windows, Android, and Linux." />
+  <img src="https://raw.githubusercontent.com/qualcomm/GenieX/main/docs/Mintlify-image/geniex_arch_v2.png" width="820" alt="GenieX architecture: Rust bindings, CLI, Python, Java, Docker, and OpenAI-compatible Serve interfaces sit on a single GenieX SDK, which dispatches to the llama.cpp runtime (GGML over CPU / GPU / Hexagon HTP kernels) or the Qualcomm AI Engine Direct runtime on the NPU - across Windows, Android, and Linux." />
 </div>
 
 ---
@@ -157,6 +157,76 @@ fn main() -> Result<()> {
     deinit()?;
     Ok(())
 }
+```
+
+---
+
+## ⚡ Advanced Features
+
+### 1. Token Generation Iterator (`LlmIterator`)
+Generate tokens dynamically on a background OS thread and consume them using Rust's standard `Iterator`. Dropping the iterator automatically triggers early cancellation inside the C++ inference engine to save NPU/CPU compute cycles. Best of all, **this requires zero external dependencies** (no `tokio`, no `futures`).
+
+```rust
+use geniex::*;
+
+fn main() -> Result<()> {
+    init()?;
+    let config = ModelConfig::default();
+    let mut llm = Llm::create("model.gguf", "llama_cpp", &config, None, None)?;
+
+    let iter = llm.generate_iter(Some("Hello!"), None, None);
+    for token_result in iter {
+        let token = token_result?;
+        print!("{}", token);
+    }
+    deinit()?;
+    Ok(())
+}
+```
+
+### 2. Chat Session Manager (`ChatSession`)
+Maintain stateful conversations with auto-managed chat history and cancellation support:
+
+```rust
+use geniex::*;
+
+fn main() -> Result<()> {
+    init()?;
+    let mut llm = Llm::create("model.gguf", "llama_cpp", &ModelConfig::default(), None, None)?;
+    let mut session = ChatSession::new(&mut llm);
+
+    // Synchronous execution
+    let reply = session.send_message("What is 2+2?", false, None)?;
+    println!("Response: {}", reply);
+
+    // Streaming execution via Iterator
+    let iter = session.send_message_iter("Tell me a story.", false, None)?;
+    for token in iter {
+        print!("{}", token?);
+    }
+    deinit()?;
+    Ok(())
+}
+```
+
+### 3. OpenAI-Compatible API Server
+You can run a local web server that translates OpenAI API requests to Qualcomm GenieX local acceleration on Windows ARM64 Snapdragon NPUs.
+
+To run the server:
+```bash
+$env:CARGO_GENIEX_LIB_DIR="C:\path\to\GenieX\sdk\pkg-geniex\lib"
+cargo run -p geniex-rust-example --bin openai_server -- path/to/model.gguf
+```
+
+Then query it with standard OpenAI tooling or simply `curl`:
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local-model",
+    "messages": [{"role": "user", "content": "Explain quantum computing in one sentence."}],
+    "stream": true
+  }'
 ```
 
 ---

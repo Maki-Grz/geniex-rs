@@ -21,15 +21,11 @@ impl Llm {
         model_path: &str,
         plugin_id: &str,
         config: &ModelConfig,
-        model_name: Option<&str>,
         tokenizer_path: Option<&str>,
         device_id: Option<&str>,
     ) -> Result<Self> {
         let c_model_path = CString::new(model_path).map_err(|_| GeniexError::CommonInvalidInput)?;
         let c_plugin_id = CString::new(plugin_id).map_err(|_| GeniexError::CommonInvalidInput)?;
-        let c_model_name = model_name
-            .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
-            .transpose()?;
         let c_tokenizer_path = tokenizer_path
             .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
             .transpose()?;
@@ -40,7 +36,6 @@ impl Llm {
         let raw_config = config.to_raw();
 
         let raw_input = ffi::geniex_LlmCreateInput {
-            model_name: c_model_name.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
             model_path: c_model_path.as_ptr(),
             tokenizer_path: c_tokenizer_path
                 .as_ref()
@@ -236,6 +231,85 @@ impl Llm {
     pub fn raw_handle(&self) -> *mut ffi::geniex_LLM {
         self.handle
     }
+
+    /// Generates response tokens asynchronously on a background thread, yielding strings via an Iterator.
+    ///
+    /// Dropping the returned Iterator cancels token generation early inside the C engine.
+    pub fn generate_iter(
+        &mut self,
+        prompt: Option<&str>,
+        input_ids: Option<&[i32]>,
+        config: Option<&GenerationConfig>,
+    ) -> LlmIterator<'_> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let c_prompt = prompt.map(|s| s.to_string());
+        let owned_ids = input_ids.map(|ids| ids.to_vec());
+        let owned_config = config.cloned();
+        let raw_handle = self.handle as usize;
+
+        std::thread::spawn(move || {
+            let c_prompt_str = c_prompt
+                .as_ref()
+                .map(|s| CString::new(s.as_str()).map_err(|_| GeniexError::CommonInvalidInput));
+            
+            let c_prompt_c = match c_prompt_str {
+                Some(Ok(cs)) => Some(cs),
+                Some(Err(e)) => {
+                    let _ = tx.send(Err(e));
+                    return;
+                }
+                None => None,
+            };
+
+            let raw_config = owned_config.as_ref().map(|c| c.to_raw());
+            let user_data = Box::into_raw(Box::new(tx));
+
+            extern "C" fn token_callback(
+                token: *const c_char,
+                user_data: *mut c_void,
+            ) -> bool {
+                if token.is_null() || user_data.is_null() {
+                    return true;
+                }
+                let tx = unsafe { &*(user_data as *const std::sync::mpsc::Sender<Result<String>>) };
+                let s = unsafe { CStr::from_ptr(token).to_string_lossy().into_owned() };
+                tx.send(Ok(s)).is_ok()
+            }
+
+            let (ids_ptr, ids_count) = if let Some(ref ids) = owned_ids {
+                (ids.as_ptr(), ids.len() as i32)
+            } else {
+                (ptr::null(), 0)
+            };
+
+            let input = ffi::geniex_LlmGenerateInput {
+                prompt_utf8: c_prompt_c.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                config: raw_config.as_ref().map_or(ptr::null(), |c| &c.raw),
+                on_token: Some(token_callback),
+                user_data: user_data as *mut c_void,
+                input_ids: ids_ptr,
+                input_ids_count: ids_count,
+            };
+
+            let mut output = ffi::geniex_LlmGenerateOutput {
+                full_text: ptr::null_mut(),
+                profile_data: unsafe { std::mem::zeroed() },
+            };
+
+            let code = unsafe { ffi::geniex_llm_generate(raw_handle as *mut ffi::geniex_LLM, &input, &mut output) };
+            let tx = unsafe { Box::from_raw(user_data) };
+
+            if let Err(e) = GeniexError::check(code) {
+                let _ = tx.send(Err(e));
+            }
+
+            if !output.full_text.is_null() {
+                unsafe { ffi::geniex_free(output.full_text as *mut _) };
+            }
+        });
+
+        LlmIterator { _llm: self, rx }
+    }
 }
 
 impl Drop for Llm {
@@ -244,6 +318,192 @@ impl Drop for Llm {
             // SAFETY: Destroying raw C SDK handle on drop.
             unsafe {
                 ffi::geniex_llm_destroy(self.handle);
+            }
+        }
+    }
+}
+
+/// Iterator yielding generated text tokens from the LLM.
+pub struct LlmIterator<'a> {
+    _llm: &'a mut Llm,
+    rx: std::sync::mpsc::Receiver<Result<String>>,
+}
+
+impl<'a> Iterator for LlmIterator<'a> {
+    type Item = Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rx.recv().ok()
+    }
+}
+
+/// High-level session manager that handles chat history and automatically saves/loads KV cache context.
+pub struct ChatSession<'a> {
+    llm: &'a mut Llm,
+    history: Vec<ChatMessage>,
+}
+
+impl<'a> ChatSession<'a> {
+    /// Creates a new chat session using a loaded LLM.
+    pub fn new(llm: &'a mut Llm) -> Self {
+        Self {
+            llm,
+            history: Vec::new(),
+        }
+    }
+
+    /// Appends a new chat message to the session history.
+    pub fn push_message(&mut self, role: &str, content: &str) {
+        self.history.push(ChatMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+        });
+    }
+
+    /// Accesses the complete conversation history.
+    pub fn history(&self) -> &[ChatMessage] {
+        &self.history
+    }
+
+    /// Clears the conversation history.
+    pub fn clear(&mut self) {
+        self.history.clear();
+    }
+
+    /// Sends a prompt to the LLM, returning the full response text and appending both prompt and response to history.
+    pub fn send_message(
+        &mut self,
+        prompt: &str,
+        enable_thinking: bool,
+        config: Option<&GenerationConfig>,
+    ) -> Result<String> {
+        self.push_message("user", prompt);
+        let formatted = self.llm.apply_chat_template(&self.history, None, enable_thinking, true)?;
+        
+        let (response, _) = self.llm.generate::<fn(&str) -> bool>(
+            Some(&formatted),
+            None,
+            config,
+            None,
+        )?;
+        
+        self.push_message("assistant", &response);
+        Ok(response)
+    }
+
+    /// Sends a prompt to the LLM, yielding tokens on a background thread via an iterator, and appending the final response to history.
+    pub fn send_message_iter(
+        &mut self,
+        prompt: &str,
+        enable_thinking: bool,
+        config: Option<&GenerationConfig>,
+    ) -> Result<ChatIterator<'a, '_>> {
+        self.push_message("user", prompt);
+        let formatted = self.llm.apply_chat_template(&self.history, None, enable_thinking, true)?;
+        
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        
+        let raw_handle = self.llm.handle as usize;
+        let c_prompt = CString::new(formatted).map_err(|_| GeniexError::CommonInvalidInput)?;
+        let owned_config = config.cloned();
+
+        std::thread::spawn(move || {
+            let raw_config = owned_config.as_ref().map(|c| c.to_raw());
+            let user_data = Box::into_raw(Box::new(tx));
+
+            extern "C" fn token_callback(
+                token: *const c_char,
+                user_data: *mut c_void,
+            ) -> bool {
+                if token.is_null() || user_data.is_null() {
+                    return true;
+                }
+                let tx = unsafe { &*(user_data as *const std::sync::mpsc::Sender<Result<String>>) };
+                let s = unsafe { CStr::from_ptr(token).to_string_lossy().into_owned() };
+                tx.send(Ok(s)).is_ok()
+            }
+
+            let input = ffi::geniex_LlmGenerateInput {
+                prompt_utf8: c_prompt.as_ptr(),
+                config: raw_config.as_ref().map_or(ptr::null(), |c| &c.raw),
+                on_token: Some(token_callback),
+                user_data: user_data as *mut c_void,
+                input_ids: ptr::null(),
+                input_ids_count: 0,
+            };
+
+            let mut output = ffi::geniex_LlmGenerateOutput {
+                full_text: ptr::null_mut(),
+                profile_data: unsafe { std::mem::zeroed() },
+            };
+
+            let code = unsafe { ffi::geniex_llm_generate(raw_handle as *mut ffi::geniex_LLM, &input, &mut output) };
+            let tx = unsafe { Box::from_raw(user_data) };
+
+            let full_text = if !output.full_text.is_null() {
+                let s = unsafe { CStr::from_ptr(output.full_text).to_string_lossy().into_owned() };
+                unsafe { ffi::geniex_free(output.full_text as *mut _) };
+                s
+            } else {
+                String::new()
+            };
+
+            if let Err(e) = GeniexError::check(code) {
+                let _ = tx.send(Err(e));
+            }
+
+            let _ = done_tx.send(full_text);
+        });
+
+        Ok(ChatIterator {
+            session: self,
+            rx,
+            done_rx: Some(done_rx),
+            acc: String::new(),
+        })
+    }
+}
+
+/// Iterator yielding tokens from a chat session. Appends the full message to history when finished or dropped.
+pub struct ChatIterator<'a, 'b> {
+    session: &'b mut ChatSession<'a>,
+    rx: std::sync::mpsc::Receiver<Result<String>>,
+    done_rx: Option<std::sync::mpsc::Receiver<String>>,
+    acc: String,
+}
+
+impl<'a, 'b> Iterator for ChatIterator<'a, 'b> {
+    type Item = Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.rx.recv() {
+            Ok(Ok(s)) => {
+                self.acc.push_str(&s);
+                Some(Ok(s))
+            }
+            Ok(Err(e)) => Some(Err(e)),
+            Err(_) => {
+                if let Some(done_rx) = self.done_rx.take() {
+                    if let Ok(full_text) = done_rx.try_recv() {
+                        self.session.push_message("assistant", &full_text);
+                    } else {
+                        let acc = std::mem::take(&mut self.acc);
+                        self.session.push_message("assistant", &acc);
+                    }
+                }
+                None
+            }
+        }
+    }
+}
+
+impl<'a, 'b> Drop for ChatIterator<'a, 'b> {
+    fn drop(&mut self) {
+        if let Some(done_rx) = self.done_rx.take() {
+            let final_text = done_rx.try_recv().unwrap_or_else(|_| std::mem::take(&mut self.acc));
+            if !final_text.is_empty() {
+                self.session.push_message("assistant", &final_text);
             }
         }
     }

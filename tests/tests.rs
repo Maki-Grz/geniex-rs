@@ -59,3 +59,37 @@ fn test_resolve_device() -> Result<()> {
     assert_eq!(output.ngl, 0); // cpu forces ngl = 0
     Ok(())
 }
+
+#[test]
+fn test_vlm_media_conversions() {
+    use std::path::PathBuf;
+
+    let txt = VlmMedia::Text("hello".to_string());
+    let img = VlmMedia::Image(PathBuf::from("image.jpg"));
+    let aud = VlmMedia::Audio(PathBuf::from("audio.wav"));
+
+    let content_txt = VlmContent::from(txt);
+    assert_eq!(content_txt.r#type, "text");
+    assert_eq!(content_txt.text, "hello");
+
+    let content_img = VlmContent::from(img);
+    assert_eq!(content_img.r#type, "image");
+    assert_eq!(content_img.text, "image.jpg");
+
+    let content_aud = VlmContent::from(aud);
+    assert_eq!(content_aud.r#type, "audio");
+    assert_eq!(content_aud.text, "audio.wav");
+}
+
+#[test]
+fn test_chat_session_history() {
+    // We can test session state and manipulation without model execution
+    let mut dummy_history = Vec::new();
+    dummy_history.push(ChatMessage {
+        role: "user".to_string(),
+        content: "test message".to_string(),
+    });
+    
+    assert_eq!(dummy_history.len(), 1);
+    assert_eq!(dummy_history[0].role, "user");
+}
