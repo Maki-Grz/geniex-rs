@@ -89,7 +89,7 @@ fn test_chat_session_history() {
         role: "user".to_string(),
         content: "test message".to_string(),
     });
-    
+
     assert_eq!(dummy_history.len(), 1);
     assert_eq!(dummy_history[0].role, "user");
 }
