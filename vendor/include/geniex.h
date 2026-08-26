@@ -307,7 +307,7 @@ typedef struct {
  *
  * `warning` is non-NULL when the alias was coerced (e.g. qairt only has
  * an NPU device, so cpu/gpu/hybrid fall back to NPU with a warning).
- * Callers should surface the warning and continue - geniex_resolve_device
+ * Callers should surface the warning and continue — geniex_resolve_device
  * never returns an error for coerced modes.
  *
  * An error (GENIEX_ERROR_COMMON_INVALID_DEVICE) is returned only when
@@ -624,7 +624,7 @@ typedef struct {
  *  the plugin populates it.
  *
  *  Row-major [n_rows, row_width]. When top_n == 0 the columns are the full
- *  vocabulary (row_width == vocab_size) and token_ids is NULL - column index is
+ *  vocabulary (row_width == vocab_size) and token_ids is NULL — column index is
  *  the token id. When top_n > 0 each row holds its top row_width logits sorted
  *  descending, and token_ids[r * row_width + c] is the corresponding token id. */
 typedef struct {

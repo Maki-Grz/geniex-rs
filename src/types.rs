@@ -538,3 +538,18 @@ impl From<VlmMedia> for VlmContent {
         }
     }
 }
+
+/// Raw logits and corresponding token IDs returned by a single forward pass.
+#[derive(Debug, Clone, Default)]
+pub struct ForwardLogitsOutput {
+    /// Row-major logits buffer. Length is `n_rows * row_width`.
+    pub logits: Vec<f32>,
+    /// Token IDs corresponding to the logits, populated only when `top_n > 0`.
+    pub token_ids: Option<Vec<i32>>,
+    /// Number of rows returned (depends on `all_positions`).
+    pub n_rows: usize,
+    /// Width of each row (depends on `top_n` and `vocab_size`).
+    pub row_width: usize,
+    /// Full vocabulary size of the model.
+    pub vocab_size: usize,
+}

@@ -1,6 +1,8 @@
 use crate::error::{GeniexError, Result};
 use crate::ffi;
-use crate::types::{ChatMessage, GenerationConfig, LlmModelInfo, ModelConfig, ProfileData};
+use crate::types::{
+    ChatMessage, ForwardLogitsOutput, GenerationConfig, LlmModelInfo, ModelConfig, ProfileData,
+};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::ptr;
@@ -225,6 +227,79 @@ impl Llm {
         let code = unsafe { ffi::geniex_llm_get_model_info(self.handle, &mut raw) };
         GeniexError::check(code)?;
         Ok(LlmModelInfo::from(&raw))
+    }
+
+    /// Runs a single forward pass and returns raw logits (no sampling, no decode loop).
+    ///
+    /// Runs the prefill path against a fresh KV cache and reads the LM-head output
+    /// directly, for on-target accuracy metrics (perplexity, MMLU, MMMU) that score
+    /// logits rather than generate text. Does not disturb `geniex_llm_generate`'s
+    /// sampler/KV state. Not all plugins support this; those that don't return
+    /// `GeniexError::CommonParamNotSupported`.
+    ///
+    /// With `top_n > 0`, the raw per-row logits are reduced to their top-N (by
+    /// descending logit) before returning: both `logits` and `token_ids` in the output
+    /// will have length `n_rows * row_width` where `row_width == min(top_n, vocab_size)`.
+    pub fn forward_logits(
+        &self,
+        input_ids: &[i32],
+        all_positions: bool,
+        top_n: i32,
+    ) -> Result<ForwardLogitsOutput> {
+        if input_ids.is_empty() {
+            return Err(GeniexError::CommonInvalidInput);
+        }
+
+        let input = ffi::geniex_LlmForwardLogitsInput {
+            input_ids: input_ids.as_ptr(),
+            input_ids_count: input_ids.len() as i32,
+            all_positions,
+            top_n,
+        };
+
+        let mut raw_output = ffi::geniex_LlmForwardLogitsOutput {
+            logits: std::ptr::null_mut(),
+            token_ids: std::ptr::null_mut(),
+            n_rows: 0,
+            row_width: 0,
+            vocab_size: 0,
+        };
+
+        // SAFETY: FFI call running a forward pass to compute raw logits.
+        let code = unsafe { ffi::geniex_llm_forward_logits(self.handle, &input, &mut raw_output) };
+        GeniexError::check(code)?;
+
+        let n_rows = raw_output.n_rows as usize;
+        let row_width = raw_output.row_width as usize;
+        let total_elements = n_rows * row_width;
+
+        let logits = if raw_output.logits.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: The API guarantees raw_output.logits points to at least total_elements valid float elements.
+            let slice = unsafe { std::slice::from_raw_parts(raw_output.logits, total_elements) };
+            let vec = slice.to_vec();
+            unsafe { ffi::geniex_free(raw_output.logits as *mut _) };
+            vec
+        };
+
+        let token_ids = if raw_output.token_ids.is_null() {
+            None
+        } else {
+            // SAFETY: The API guarantees raw_output.token_ids points to at least total_elements valid i32 elements when top_n > 0.
+            let slice = unsafe { std::slice::from_raw_parts(raw_output.token_ids, total_elements) };
+            let vec = slice.to_vec();
+            unsafe { ffi::geniex_free(raw_output.token_ids as *mut _) };
+            Some(vec)
+        };
+
+        Ok(ForwardLogitsOutput {
+            logits,
+            token_ids,
+            n_rows,
+            row_width,
+            vocab_size: raw_output.vocab_size as usize,
+        })
     }
 
     /// Returns the raw underlying C SDK handle pointer.
