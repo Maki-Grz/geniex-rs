@@ -27,11 +27,21 @@ fn test_config_defaults() {
 
 #[test]
 fn test_chat_message() {
-    let msg = ChatMessage {
-        role: "user".to_string(),
-        content: "hello".to_string(),
-    };
+    let msg = ChatMessage::new("user", "hello");
     assert_eq!(msg.role, "user");
+    assert_eq!(msg.content, "hello");
+
+    let tc = ToolCall::new(Some("call_1"), "get_weather", r#"{"location":"Paris"}"#);
+    assert_eq!(tc.name, "get_weather");
+
+    let assistant_msg = ChatMessage::assistant_with_tool_calls("", vec![tc]);
+    assert_eq!(assistant_msg.role, "assistant");
+    assert_eq!(assistant_msg.tool_calls.len(), 1);
+
+    let tool_msg = ChatMessage::tool_response("22°C", "call_1", "get_weather");
+    assert_eq!(tool_msg.role, "tool");
+    assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_1"));
+    assert_eq!(tool_msg.tool_name.as_deref(), Some("get_weather"));
 }
 
 #[test]
@@ -84,12 +94,9 @@ fn test_vlm_media_conversions() {
 #[test]
 fn test_chat_session_history() {
     // We can test session state and manipulation without model execution
-    let mut dummy_history = Vec::new();
-    dummy_history.push(ChatMessage {
-        role: "user".to_string(),
-        content: "test message".to_string(),
-    });
+    let dummy_history = [ChatMessage::new("user", "test message")];
 
     assert_eq!(dummy_history.len(), 1);
     assert_eq!(dummy_history[0].role, "user");
+    assert_eq!(dummy_history[0].content, "test message");
 }

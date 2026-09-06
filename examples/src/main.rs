@@ -71,10 +71,10 @@ fn main() -> Result<()> {
         let config = ModelConfig::default();
         let mut llm = Llm::create(path_str, "llama_cpp", &config, None, None)?;
 
-        let messages = vec![ChatMessage {
-            role: "user".to_string(),
-            content: "Hello! Describe what GenieX is in one sentence.".to_string(),
-        }];
+        let messages = vec![ChatMessage::new(
+            "user",
+            "Hello! Describe what GenieX is in one sentence.",
+        )];
 
         println!("[+] Applying chat template...");
         let prompt = llm.apply_chat_template(&messages, None, false, true)?;

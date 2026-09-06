@@ -38,6 +38,8 @@ pub enum GeniexError {
     CommonChipsetUnavailable,
     /// Specified parameter is not supported by the plugin.
     CommonParamNotSupported,
+    /// Insufficient free disk space for download.
+    CommonInsufficientDiskSpace,
     /// Failed to load model weights.
     CommonModelLoad,
     /// Model binary is invalid or corrupted.
@@ -108,6 +110,9 @@ impl GeniexError {
             ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_PARAM_NOT_SUPPORTED => {
                 Self::CommonParamNotSupported
             }
+            ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_INSUFFICIENT_DISK_SPACE => {
+                Self::CommonInsufficientDiskSpace
+            }
             ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_MODEL_LOAD => Self::CommonModelLoad,
             ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_MODEL_INVALID => Self::CommonModelInvalid,
             ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_PLUGIN_LOAD => Self::CommonPluginLoad,
@@ -160,6 +165,9 @@ impl GeniexError {
             }
             Self::CommonParamNotSupported => {
                 ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_PARAM_NOT_SUPPORTED
+            }
+            Self::CommonInsufficientDiskSpace => {
+                ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_INSUFFICIENT_DISK_SPACE
             }
             Self::CommonModelLoad => ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_MODEL_LOAD,
             Self::CommonModelInvalid => ffi::geniex_ErrorCode_GENIEX_ERROR_COMMON_MODEL_INVALID,
