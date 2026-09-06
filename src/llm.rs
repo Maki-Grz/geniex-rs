@@ -426,12 +426,14 @@ impl<'a> ChatSession<'a> {
         }
     }
 
-    /// Appends a new chat message to the session history.
+    /// Appends a new simple chat message to the session history.
     pub fn push_message(&mut self, role: &str, content: &str) {
-        self.history.push(ChatMessage {
-            role: role.to_string(),
-            content: content.to_string(),
-        });
+        self.history.push(ChatMessage::new(role, content));
+    }
+
+    /// Appends a chat message (including any tool calls or tool response metadata) to session history.
+    pub fn push_chat_message(&mut self, message: ChatMessage) {
+        self.history.push(message);
     }
 
     /// Accesses the complete conversation history.

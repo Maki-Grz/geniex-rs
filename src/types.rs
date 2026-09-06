@@ -320,42 +320,171 @@ impl ModelConfig {
     }
 }
 
-/// Representation of a single chat message (role and content).
-#[derive(Debug, Clone)]
+/// A function call the model issued on a prior "assistant" turn.
+///
+/// Chat templates need these structurally: many render a tool response only when
+/// the preceding assistant message carries `tool_calls`, and match the response
+/// back to the call by `id`. Flattening a call into assistant `content` text
+/// drops the following "tool" message from the prompt entirely.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolCall {
+    /// Call id echoed by the matching "tool" message (optional).
+    pub id: Option<String>,
+    /// Function name.
+    pub name: String,
+    /// Function arguments as a JSON string.
+    pub arguments: String,
+}
+
+impl ToolCall {
+    /// Creates a new `ToolCall`.
+    pub fn new(
+        id: Option<impl Into<String>>,
+        name: impl Into<String>,
+        arguments: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.map(Into::into),
+            name: name.into(),
+            arguments: arguments.into(),
+        }
+    }
+}
+
+/// Representation of a single chat message (role and content, plus optional tool calling metadata).
+#[derive(Debug, Clone, Default)]
 pub struct ChatMessage {
-    /// Message sender role (e.g., "user", "assistant", "system").
+    /// Message sender role (e.g., "user", "assistant", "system", "tool").
     pub role: String,
     /// Message body content.
     pub content: String,
+    /// "assistant": calls issued this turn (optional).
+    pub tool_calls: Vec<ToolCall>,
+    /// "tool": id of the call this responds to (optional).
+    pub tool_call_id: Option<String>,
+    /// "tool": name of the function that ran (optional).
+    pub tool_name: Option<String>,
+}
+
+impl ChatMessage {
+    /// Creates a simple chat message with role and content.
+    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    /// Creates an assistant message with tool calls.
+    pub fn assistant_with_tool_calls(
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+            tool_calls,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    /// Creates a tool response message.
+    pub fn tool_response(
+        content: impl Into<String>,
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+            tool_name: Some(tool_name.into()),
+        }
+    }
 }
 
 pub(crate) struct RawLlmChatMessages {
     pub raw_messages: Vec<ffi::geniex_LlmChatMessage>,
     _roles: Vec<CString>,
     _contents: Vec<CString>,
+    _tool_call_ids: Vec<Option<CString>>,
+    _tool_names: Vec<Option<CString>>,
+    _tool_calls_structs: Vec<Vec<ffi::geniex_ToolCall>>,
+    _tool_calls_strings: Vec<Vec<(Option<CString>, CString, CString)>>,
 }
 
 impl ChatMessage {
     pub(crate) fn vec_to_raw(messages: &[ChatMessage]) -> RawLlmChatMessages {
         let mut roles = Vec::with_capacity(messages.len());
         let mut contents = Vec::with_capacity(messages.len());
+        let mut tool_call_ids = Vec::with_capacity(messages.len());
+        let mut tool_names = Vec::with_capacity(messages.len());
+        let mut tool_calls_structs = Vec::with_capacity(messages.len());
+        let mut tool_calls_strings = Vec::with_capacity(messages.len());
         let mut raw_messages = Vec::with_capacity(messages.len());
 
         for msg in messages {
             let role_c = safe_c_string(&msg.role);
             let content_c = safe_c_string(&msg.content);
+
+            let tool_call_id_c = msg.tool_call_id.as_ref().map(|s| safe_c_string(s));
+            let tool_name_c = msg.tool_name.as_ref().map(|s| safe_c_string(s));
+
+            let mut tc_strings = Vec::with_capacity(msg.tool_calls.len());
+            let mut tc_structs = Vec::with_capacity(msg.tool_calls.len());
+
+            for tc in &msg.tool_calls {
+                let id_c = tc.id.as_ref().map(|s| safe_c_string(s));
+                let name_c = safe_c_string(&tc.name);
+                let args_c = safe_c_string(&tc.arguments);
+
+                tc_structs.push(ffi::geniex_ToolCall {
+                    id: id_c.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                    name: name_c.as_ptr(),
+                    arguments: args_c.as_ptr(),
+                });
+
+                tc_strings.push((id_c, name_c, args_c));
+            }
+
             raw_messages.push(ffi::geniex_LlmChatMessage {
                 role: role_c.as_ptr(),
                 content: content_c.as_ptr(),
+                tool_calls: if tc_structs.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    tc_structs.as_ptr() as *mut _
+                },
+                tool_call_count: tc_structs.len() as i32,
+                tool_call_id: tool_call_id_c
+                    .as_ref()
+                    .map_or(std::ptr::null(), |s| s.as_ptr()),
+                tool_name: tool_name_c
+                    .as_ref()
+                    .map_or(std::ptr::null(), |s| s.as_ptr()),
             });
+
             roles.push(role_c);
             contents.push(content_c);
+            tool_call_ids.push(tool_call_id_c);
+            tool_names.push(tool_name_c);
+            tool_calls_structs.push(tc_structs);
+            tool_calls_strings.push(tc_strings);
         }
 
         RawLlmChatMessages {
             raw_messages,
             _roles: roles,
             _contents: contents,
+            _tool_call_ids: tool_call_ids,
+            _tool_names: tool_names,
+            _tool_calls_structs: tool_calls_structs,
+            _tool_calls_strings: tool_calls_strings,
         }
     }
 }
@@ -370,12 +499,31 @@ pub struct VlmContent {
 }
 
 /// Chat message structure for Vision-Language Models.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct VlmChatMessage {
-    /// Message role ("user", "assistant", "system").
+    /// Message role ("user", "assistant", "system", "tool", …).
     pub role: String,
     /// Slice of content payloads (text and media items).
     pub contents: Vec<VlmContent>,
+    /// "assistant": calls issued this turn (optional).
+    pub tool_calls: Vec<ToolCall>,
+    /// "tool": id of the call this responds to (optional).
+    pub tool_call_id: Option<String>,
+    /// "tool": name of the function that ran (optional).
+    pub tool_name: Option<String>,
+}
+
+impl VlmChatMessage {
+    /// Creates a new VLM chat message.
+    pub fn new(role: impl Into<String>, contents: Vec<VlmContent>) -> Self {
+        Self {
+            role: role.into(),
+            contents,
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
 }
 
 pub(crate) struct RawVlmChatMessages {
@@ -384,6 +532,10 @@ pub(crate) struct RawVlmChatMessages {
     _content_structs: Vec<Vec<ffi::geniex_VlmContent>>,
     _type_cstrings: Vec<Vec<CString>>,
     _text_cstrings: Vec<Vec<CString>>,
+    _tool_call_ids: Vec<Option<CString>>,
+    _tool_names: Vec<Option<CString>>,
+    _tool_calls_structs: Vec<Vec<ffi::geniex_ToolCall>>,
+    _tool_calls_strings: Vec<Vec<(Option<CString>, CString, CString)>>,
 }
 
 impl VlmChatMessage {
@@ -392,6 +544,10 @@ impl VlmChatMessage {
         let mut content_structs = Vec::with_capacity(messages.len());
         let mut type_cstrings = Vec::with_capacity(messages.len());
         let mut text_cstrings = Vec::with_capacity(messages.len());
+        let mut tool_call_ids = Vec::with_capacity(messages.len());
+        let mut tool_names = Vec::with_capacity(messages.len());
+        let mut tool_calls_structs = Vec::with_capacity(messages.len());
+        let mut tool_calls_strings = Vec::with_capacity(messages.len());
         let mut raw_messages = Vec::with_capacity(messages.len());
 
         for msg in messages {
@@ -411,6 +567,26 @@ impl VlmChatMessage {
                 sub_texts.push(txt_c);
             }
 
+            let tool_call_id_c = msg.tool_call_id.as_ref().map(|s| safe_c_string(s));
+            let tool_name_c = msg.tool_name.as_ref().map(|s| safe_c_string(s));
+
+            let mut tc_strings = Vec::with_capacity(msg.tool_calls.len());
+            let mut tc_structs = Vec::with_capacity(msg.tool_calls.len());
+
+            for tc in &msg.tool_calls {
+                let id_c = tc.id.as_ref().map(|s| safe_c_string(s));
+                let name_c = safe_c_string(&tc.name);
+                let args_c = safe_c_string(&tc.arguments);
+
+                tc_structs.push(ffi::geniex_ToolCall {
+                    id: id_c.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                    name: name_c.as_ptr(),
+                    arguments: args_c.as_ptr(),
+                });
+
+                tc_strings.push((id_c, name_c, args_c));
+            }
+
             raw_messages.push(ffi::geniex_VlmChatMessage {
                 role: role_c.as_ptr(),
                 contents: if sub_structs.is_empty() {
@@ -419,12 +595,28 @@ impl VlmChatMessage {
                     sub_structs.as_ptr() as *mut _
                 },
                 content_count: sub_structs.len() as i64,
+                tool_calls: if tc_structs.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    tc_structs.as_ptr() as *mut _
+                },
+                tool_call_count: tc_structs.len() as i32,
+                tool_call_id: tool_call_id_c
+                    .as_ref()
+                    .map_or(std::ptr::null(), |s| s.as_ptr()),
+                tool_name: tool_name_c
+                    .as_ref()
+                    .map_or(std::ptr::null(), |s| s.as_ptr()),
             });
 
             roles.push(role_c);
             content_structs.push(sub_structs);
             type_cstrings.push(sub_types);
             text_cstrings.push(sub_texts);
+            tool_call_ids.push(tool_call_id_c);
+            tool_names.push(tool_name_c);
+            tool_calls_structs.push(tc_structs);
+            tool_calls_strings.push(tc_strings);
         }
 
         RawVlmChatMessages {
@@ -433,6 +625,10 @@ impl VlmChatMessage {
             _content_structs: content_structs,
             _type_cstrings: type_cstrings,
             _text_cstrings: text_cstrings,
+            _tool_call_ids: tool_call_ids,
+            _tool_names: tool_names,
+            _tool_calls_structs: tool_calls_structs,
+            _tool_calls_strings: tool_calls_strings,
         }
     }
 }

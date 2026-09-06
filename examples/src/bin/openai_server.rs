@@ -122,10 +122,7 @@ async fn chat_completions(
     let messages: Vec<ChatMessage> = payload
         .messages
         .iter()
-        .map(|m| ChatMessage {
-            role: m.role.clone(),
-            content: m.content.clone(),
-        })
+        .map(|m| ChatMessage::new(&m.role, &m.content))
         .collect();
 
     if payload.stream {
