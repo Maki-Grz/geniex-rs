@@ -1,6 +1,6 @@
 use crate::error::{GeniexError, Result};
 use crate::ffi;
-use crate::types::{DeviceList, ResolveDeviceInput, ResolveDeviceOutput};
+use crate::types::{DeviceList, LogLevel, ResolveDeviceInput, ResolveDeviceOutput};
 use std::ffi::{CStr, CString};
 
 /// Initializes the native GenieX C SDK runtime environment.
@@ -209,6 +209,48 @@ pub fn set_log_callback(callback: ffi::geniex_log_callback) -> Result<()> {
     // SAFETY: FFI call passing valid C function pointer for logging.
     let code = unsafe { ffi::geniex_set_log(callback) };
     GeniexError::check(code)
+}
+
+/// Sets the minimum severity level forwarded to the logging callback.
+///
+/// Also sets the QNN backend log level for the `qairt` plugin (DEBUG/TRACE can slow decode).
+/// Must be called before [`init()`]. Default is [`LogLevel::Trace`].
+pub fn set_log_level(level: LogLevel) -> Result<()> {
+    // SAFETY: FFI call setting library-wide log level.
+    let code = unsafe { ffi::geniex_set_log_level(level as ffi::geniex_LogLevel) };
+    GeniexError::check(code)
+}
+
+/// Sets the filesystem directory from which to load the QAIRT runtime instead of the bundled runtime.
+///
+/// Optional: A QAIRT runtime ships bundled with the `qairt` plugin and is used by default.
+/// Pass `None` or `Some("")` to revert to the bundled runtime.
+///
+/// Must be called before [`init()`]. Once initialized, QNN libraries cannot be unloaded
+/// or changed, and this function will return [`GeniexError::CommonAlreadyInitialized`].
+pub fn set_qairt_runtime_path(path: Option<&str>) -> Result<()> {
+    let c_path = path
+        .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
+        .transpose()?;
+    let ptr = c_path.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+    // SAFETY: FFI call setting custom QAIRT runtime path.
+    let code = unsafe { ffi::geniex_set_qairt_runtime_path(ptr) };
+    GeniexError::check(code)
+}
+
+/// Reads back the custom QAIRT runtime directory configured via [`set_qairt_runtime_path`].
+///
+/// Returns an empty string if no custom path has been set.
+pub fn get_qairt_runtime_path() -> String {
+    // SAFETY: geniex_get_qairt_runtime_path returns a pointer to a valid null-terminated string owned by the library.
+    unsafe {
+        let ptr = ffi::geniex_get_qairt_runtime_path();
+        if ptr.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(ptr).to_string_lossy().into_owned()
+        }
+    }
 }
 
 /// Registers a custom plugin creation handler with the GenieX runtime.

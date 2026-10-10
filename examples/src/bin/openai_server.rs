@@ -75,12 +75,21 @@ async fn main() -> Result<()> {
     let model_path = &args[1];
     println!("[+] Loading model from: {}", model_path);
 
+    // Suppress verbose SDK logs during web server operation
+    set_log_level(LogLevel::Warn)?;
+
     init()?;
     println!("[+] SDK Initialized successfully.");
 
-    let config = ModelConfig::default();
+    let config = ModelConfig {
+        power_mode: PowerMode::Burst,
+        ..Default::default()
+    };
     let llm = Llm::create(model_path, "llama_cpp", &config, None, None)?;
-    println!("[+] LLM model loaded successfully.");
+    println!(
+        "[+] LLM model loaded successfully (PowerMode: {}).",
+        config.power_mode
+    );
 
     let state = Arc::new(AppState {
         llm: Mutex::new(llm),

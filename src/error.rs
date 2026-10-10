@@ -66,6 +66,8 @@ pub enum GeniexError {
     VlmAudioFormat,
     /// Multimodal generation failed in VLM engine.
     VlmGenerationFailed,
+    /// Cached VLM prefix cannot be reused.
+    VlmPrefixReuseFailed,
     /// Unrecognized return code from native C SDK.
     Unknown(i32),
 }
@@ -132,6 +134,9 @@ impl GeniexError {
             ffi::geniex_ErrorCode_GENIEX_ERROR_VLM_AUDIO_LOAD => Self::VlmAudioLoad,
             ffi::geniex_ErrorCode_GENIEX_ERROR_VLM_AUDIO_FORMAT => Self::VlmAudioFormat,
             ffi::geniex_ErrorCode_GENIEX_ERROR_VLM_GENERATION_FAILED => Self::VlmGenerationFailed,
+            ffi::geniex_ErrorCode_GENIEX_ERROR_VLM_PREFIX_REUSE_FAILED => {
+                Self::VlmPrefixReuseFailed
+            }
             _ => Self::Unknown(code),
         }
     }
@@ -188,6 +193,9 @@ impl GeniexError {
             Self::VlmAudioLoad => ffi::geniex_ErrorCode_GENIEX_ERROR_VLM_AUDIO_LOAD,
             Self::VlmAudioFormat => ffi::geniex_ErrorCode_GENIEX_ERROR_VLM_AUDIO_FORMAT,
             Self::VlmGenerationFailed => ffi::geniex_ErrorCode_GENIEX_ERROR_VLM_GENERATION_FAILED,
+            Self::VlmPrefixReuseFailed => {
+                ffi::geniex_ErrorCode_GENIEX_ERROR_VLM_PREFIX_REUSE_FAILED
+            }
             Self::Unknown(c) => *c,
         };
         // SAFETY: geniex_get_error_message takes an integer error code and returns either

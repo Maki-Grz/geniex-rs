@@ -2,6 +2,7 @@ use crate::error::{GeniexError, Result};
 use crate::ffi;
 use crate::types::{
     ChatMessage, ForwardLogitsOutput, GenerationConfig, LlmModelInfo, ModelConfig, ProfileData,
+    ScoreOutput,
 };
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
@@ -299,6 +300,56 @@ impl Llm {
             n_rows,
             row_width,
             vocab_size: raw_output.vocab_size as usize,
+        })
+    }
+
+    /// Evaluates candidate strings as the single next token following a UTF-8 prompt without sampling.
+    ///
+    /// The plugin tokenizes the prompt (including model special tokens) and verifies that each candidate
+    /// appends exactly one ordinary token, returning one raw logit per candidate string along with the
+    /// number of prompt tokens evaluated.
+    ///
+    /// Returns [`GeniexError::CommonInvalidInput`] if `prompt` or `candidates` is empty.
+    pub fn score(&self, prompt: &str, candidates: &[&str]) -> Result<ScoreOutput> {
+        if prompt.is_empty() || candidates.is_empty() {
+            return Err(GeniexError::CommonInvalidInput);
+        }
+
+        let c_prompt = CString::new(prompt).map_err(|_| GeniexError::CommonInvalidInput)?;
+        let c_candidates: Vec<CString> = candidates
+            .iter()
+            .map(|&c| CString::new(c).map_err(|_| GeniexError::CommonInvalidInput))
+            .collect::<Result<Vec<CString>>>()?;
+        let candidate_ptrs: Vec<*const c_char> = c_candidates.iter().map(|c| c.as_ptr()).collect();
+
+        let input = ffi::geniex_LlmScoreInput {
+            prompt_utf8: c_prompt.as_ptr(),
+            candidates: candidate_ptrs.as_ptr(),
+            candidate_count: candidate_ptrs.len() as i32,
+        };
+
+        let mut output = ffi::geniex_LlmScoreOutput {
+            logits: std::ptr::null_mut(),
+            input_tokens: 0,
+        };
+
+        // SAFETY: FFI call scoring single-token candidates.
+        let code = unsafe { ffi::geniex_llm_score(self.handle, &input, &mut output) };
+        GeniexError::check(code)?;
+
+        let logits = if output.logits.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: The API guarantees output.logits points to candidate_count valid float elements.
+            let slice = unsafe { std::slice::from_raw_parts(output.logits, candidates.len()) };
+            let vec = slice.to_vec();
+            unsafe { ffi::geniex_free(output.logits as *mut _) };
+            vec
+        };
+
+        Ok(ScoreOutput {
+            logits,
+            input_tokens: output.input_tokens as usize,
         })
     }
 
