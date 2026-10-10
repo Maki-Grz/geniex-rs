@@ -265,6 +265,97 @@ pub struct ModelConfig {
     pub spec_n_max: i32,
     pub spec_n_min: i32,
     pub spec_p_min: f32,
+    /// HTP power/clock-management mode, shared by qairt and llama_cpp plugins.
+    /// Defaults to [`PowerMode::Burst`].
+    pub power_mode: PowerMode,
+}
+
+/// Unified HTP power/clock-management mode, shared by `qairt` and `llama_cpp` plugins.
+///
+/// Controls hardware frequency and performance profiles on Qualcomm Hexagon NPU.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PowerMode {
+    /// Lowest power consumption mode.
+    LowPowerSaver = ffi::geniex_PowerMode_GENIEX_POWER_MODE_LOW_POWER_SAVER,
+    /// Power saver mode.
+    PowerSaver = ffi::geniex_PowerMode_GENIEX_POWER_MODE_POWER_SAVER,
+    /// High power saver mode.
+    HighPowerSaver = ffi::geniex_PowerMode_GENIEX_POWER_MODE_HIGH_POWER_SAVER,
+    /// Low balanced mode.
+    LowBalanced = ffi::geniex_PowerMode_GENIEX_POWER_MODE_LOW_BALANCED,
+    /// Balanced power and performance mode.
+    Balanced = ffi::geniex_PowerMode_GENIEX_POWER_MODE_BALANCED,
+    /// High performance mode.
+    HighPerformance = ffi::geniex_PowerMode_GENIEX_POWER_MODE_HIGH_PERFORMANCE,
+    /// Sustained high performance mode.
+    SustainedHighPerformance = ffi::geniex_PowerMode_GENIEX_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE,
+    /// Burst mode offering maximum clock frequency (default).
+    #[default]
+    Burst = ffi::geniex_PowerMode_GENIEX_POWER_MODE_BURST,
+}
+
+impl PowerMode {
+    /// Maps a user-facing power-mode alias string to a [`PowerMode`].
+    ///
+    /// Empty string or `"default"` resolves to `PowerMode::Burst`.
+    /// Matching is case-insensitive with leading and trailing whitespace trimmed.
+    pub fn resolve(mode: &str) -> std::result::Result<Self, String> {
+        let trimmed = mode.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+            return Ok(Self::Burst);
+        }
+        if trimmed.eq_ignore_ascii_case("low_power_saver") {
+            Ok(Self::LowPowerSaver)
+        } else if trimmed.eq_ignore_ascii_case("power_saver") {
+            Ok(Self::PowerSaver)
+        } else if trimmed.eq_ignore_ascii_case("high_power_saver") {
+            Ok(Self::HighPowerSaver)
+        } else if trimmed.eq_ignore_ascii_case("low_balanced") {
+            Ok(Self::LowBalanced)
+        } else if trimmed.eq_ignore_ascii_case("balanced") {
+            Ok(Self::Balanced)
+        } else if trimmed.eq_ignore_ascii_case("high_performance") {
+            Ok(Self::HighPerformance)
+        } else if trimmed.eq_ignore_ascii_case("sustained_high_performance") {
+            Ok(Self::SustainedHighPerformance)
+        } else if trimmed.eq_ignore_ascii_case("burst") {
+            Ok(Self::Burst)
+        } else {
+            Err(format!(
+                "invalid power mode {:?}, must be one of: low_power_saver, power_saver, high_power_saver, low_balanced, balanced, high_performance, sustained_high_performance, burst, default",
+                mode
+            ))
+        }
+    }
+
+    /// Returns the canonical alias string for this power mode.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::LowPowerSaver => "low_power_saver",
+            Self::PowerSaver => "power_saver",
+            Self::HighPowerSaver => "high_power_saver",
+            Self::LowBalanced => "low_balanced",
+            Self::Balanced => "balanced",
+            Self::HighPerformance => "high_performance",
+            Self::SustainedHighPerformance => "sustained_high_performance",
+            Self::Burst => "burst",
+        }
+    }
+}
+
+impl std::str::FromStr for PowerMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::resolve(s)
+    }
+}
+
+impl std::fmt::Display for PowerMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
 }
 
 pub(crate) struct RawModelConfig {
@@ -308,6 +399,7 @@ impl ModelConfig {
             spec_n_max: self.spec_n_max,
             spec_n_min: self.spec_n_min,
             spec_p_min: self.spec_p_min,
+            power_mode: self.power_mode as ffi::geniex_PowerMode,
         };
 
         RawModelConfig {
@@ -748,4 +840,32 @@ pub struct ForwardLogitsOutput {
     pub row_width: usize,
     /// Full vocabulary size of the model.
     pub vocab_size: usize,
+}
+
+/// Raw logits and prompt evaluation token count returned by [`Llm::score`](crate::Llm::score).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScoreOutput {
+    /// One raw logit per candidate string.
+    pub logits: Vec<f32>,
+    /// Number of prompt tokens evaluated.
+    pub input_tokens: usize,
+}
+
+/// Input configuration options for creating a [`Vlm`](crate::Vlm) instance.
+#[derive(Debug, Clone)]
+pub struct VlmCreateOptions<'a> {
+    /// Path to the multimodal model file.
+    pub model_path: &'a str,
+    /// Target plugin identifier (e.g., "llama_cpp", "qairt").
+    pub plugin_id: &'a str,
+    /// Model configuration options.
+    pub config: &'a ModelConfig,
+    /// Optional path to the projector/encoder weights file.
+    pub mmproj_path: Option<&'a str>,
+    /// Optional path to the tokenizer file.
+    pub tokenizer_path: Option<&'a str>,
+    /// Optional hardware acceleration device identifier.
+    pub device_id: Option<&'a str>,
+    /// Optional compute device override for the vision encoder.
+    pub vit_device_id: Option<&'a str>,
 }

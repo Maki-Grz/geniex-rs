@@ -84,7 +84,8 @@ typedef enum {
     GENIEX_ERROR_VLM_AUDIO_LOAD   = -201101, /**< Audio loading failed */
     GENIEX_ERROR_VLM_AUDIO_FORMAT = -201102, /**< Unsupported audio format */
 
-    GENIEX_ERROR_VLM_GENERATION_FAILED = -201201, /**< Multimodal generation failed */
+    GENIEX_ERROR_VLM_GENERATION_FAILED   = -201201, /**< Multimodal generation failed */
+    GENIEX_ERROR_VLM_PREFIX_REUSE_FAILED = -201202, /**< Cached VLM prefix cannot be reused */
 
 } geniex_ErrorCode;
 
@@ -110,6 +111,25 @@ typedef enum {
     GENIEX_LOG_LEVEL_WARN,  /* Warning messages */
     GENIEX_LOG_LEVEL_ERROR  /* Error messages */
 } geniex_LogLevel;
+
+/**
+ * Unified HTP power/clock-management mode, shared by the qairt and
+ * llama_cpp plugins. Callers resolve their own --power-mode alias string
+ * into this enum before crossing the C ABI (geniex_ModelConfig.power_mode);
+ * the plugins consume it as-is. Ordered lowest to highest power; values
+ * match llama.cpp's htp_power_mode so the llama_cpp plugin can pass them
+ * through without a remap table.
+ */
+typedef enum {
+    GENIEX_POWER_MODE_LOW_POWER_SAVER            = 0,
+    GENIEX_POWER_MODE_POWER_SAVER                = 1,
+    GENIEX_POWER_MODE_HIGH_POWER_SAVER           = 2,
+    GENIEX_POWER_MODE_LOW_BALANCED               = 3,
+    GENIEX_POWER_MODE_BALANCED                   = 4,
+    GENIEX_POWER_MODE_HIGH_PERFORMANCE           = 5,
+    GENIEX_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE = 6,
+    GENIEX_POWER_MODE_BURST                      = 7
+} geniex_PowerMode;
 
 /** Logging callback function type */
 typedef void (*geniex_log_callback)(geniex_LogLevel, const char*);
@@ -185,6 +205,57 @@ GENIEX_API int32_t geniex_deinit(void);
  * @thread_safety: Thread-safe
  */
 GENIEX_API int32_t geniex_set_log(geniex_log_callback callback);
+
+/**
+ * @brief Set the minimum level forwarded to the logging callback, call before init
+ *
+ * Also sets the QNN backend's log level in the qairt plugin; DEBUG and TRACE slow decode.
+ * Default is GENIEX_LOG_LEVEL_TRACE. With no callback the plugin runs QNN at ERROR.
+ *
+ * @param level[in]: The minimum level to forward.
+ *
+ * @return geniex_ErrorCode: GENIEX_SUCCESS on success, negative on failure.
+ *
+ * @thread_safety: Thread-safe
+ */
+GENIEX_API int32_t geniex_set_log_level(geniex_LogLevel level);
+
+/**
+ * @brief Load the QAIRT runtime from `path` instead of the one bundled with the plugin
+ *
+ * Optional: a QAIRT runtime ships with the qairt plugin and is used by default, so
+ * this is for running against another QAIRT version without rebuilding. Ignored by
+ * other plugins.
+ *
+ * `path` may be either a QAIRT SDK root or a flat folder of QNN libraries; the
+ * plugin tells them apart. Pass NULL or "" to go back to the bundled runtime.
+ *
+ * Call before geniex_init. The QNN libraries load once per process and are never
+ * unloaded, so the runtime cannot be changed afterwards -- not even across a
+ * geniex_deinit / geniex_init cycle, which leaves them resident. Once initialized
+ * this returns GENIEX_ERROR_COMMON_ALREADY_INITIALIZED; run another QAIRT runtime
+ * in a fresh process. Takes precedence over GENIEX_QAIRT_LIB.
+ *
+ * @param path[in]: Runtime directory, or NULL to unset. Copied; the caller keeps
+ *                  ownership. Not validated here -- an unusable path fails model
+ *                  creation with a message naming the layouts it looked for.
+ *
+ * @return geniex_ErrorCode: GENIEX_SUCCESS, or
+ *         GENIEX_ERROR_COMMON_ALREADY_INITIALIZED when called after geniex_init.
+ *
+ * @thread_safety: Not thread-safe against geniex_init.
+ */
+GENIEX_API int32_t geniex_set_qairt_runtime_path(const char* path);
+
+/**
+ * @brief Read back what geniex_set_qairt_runtime_path() stored
+ *
+ * @return Null-terminated UTF-8 string, "" when unset. Owned by the library; valid
+ *         until the next geniex_set_qairt_runtime_path() call. Never NULL.
+ *
+ * @thread_safety: Not thread-safe against geniex_set_qairt_runtime_path().
+ */
+GENIEX_API const char* geniex_get_qairt_runtime_path(void);
 
 /**
  * @brief Simple wrapper around free() to free memory allocated by ML library functions
@@ -441,6 +512,15 @@ typedef struct {
     int32_t     spec_n_max;        // max draft tokens per step (0 = plugin default of 3)
     int32_t     spec_n_min;        // min draft tokens per step (0 = llama.cpp default)
     float       spec_p_min;        // min greedy draft probability (0 = llama.cpp default)
+
+    // HTP power/clock-management mode, shared by qairt and llama_cpp (ignored
+    // by cpu/gpu). Callers resolve their own --power-mode alias string into
+    // this enum (see sdk/include/power_mode_alias.h for C/C++ callers; Go /
+    // Python / Android resolve natively). No implicit default: this field is
+    // GENIEX_POWER_MODE_LOW_POWER_SAVER (0) if left zero-initialized, so set
+    // it explicitly -- GENIEX_POWER_MODE_BURST when the user hasn't asked
+    // for a specific mode.
+    geniex_PowerMode power_mode;
 } geniex_ModelConfig;
 
 /* ====================  LLM Handle  ======================================== */
@@ -684,6 +764,24 @@ typedef struct {
 GENIEX_API int32_t geniex_llm_forward_logits(
     geniex_LLM* handle, const geniex_LlmForwardLogitsInput* input, geniex_LlmForwardLogitsOutput* output);
 
+/** Score single-token candidate strings after a UTF-8 prompt without sampling.
+ *  The plugin tokenizes the prompt (with model special tokens) and verifies
+ *  that each candidate appends exactly one ordinary token. Only backends with
+ *  raw-logit support implement this operation. */
+typedef struct {
+    const char*        prompt_utf8;
+    const char* const* candidates;
+    int32_t            candidate_count;
+} geniex_LlmScoreInput;
+
+typedef struct {
+    float*  logits;       /** One logit per candidate; caller frees with geniex_free. */
+    int32_t input_tokens; /** Number of prompt tokens evaluated. */
+} geniex_LlmScoreOutput;
+
+GENIEX_API int32_t geniex_llm_score(
+    geniex_LLM* handle, const geniex_LlmScoreInput* input, geniex_LlmScoreOutput* output);
+
 /* ========================================================================== */
 /*                              MULTIMODAL MODELS (VLM)                          */
 /* ========================================================================== */
@@ -716,6 +814,7 @@ typedef struct {
     geniex_ModelConfig config;         /** Model configuration */
     geniex_PluginId    plugin_id;      /** Plugin to use for the model */
     const char*        device_id;      /** device to use for the model */
+    const char*        vit_device_id;  /** optional device override for the vision encoder */
     geniex_Path        tokenizer_path; /** Path to the tokenizer file */
 } geniex_VlmCreateInput;
 

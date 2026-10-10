@@ -1,13 +1,13 @@
 [package]
 name = "geniex-rs"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Safe, idiomatic Rust bindings for the Qualcomm GenieX C API (LLM & VLM inference runtime on Snapdragon)"
 license = "BSD-3-Clause"
 repository = "https://github.com/Maki-Grz/geniex-rs"
 keywords = ["qualcomm", "geniex", "llm", "bindings", "vlm"]
 categories = ["api-bindings", "hardware-support"]
-authors = ["Qualcomm Technologies, Inc.", "GenieX Rust Community Contributors"]
+authors = ["Qualcomm Technologies, Inc.", "Maximilien GRZECZKA"]
 readme = "README.md"
 documentation = "https://geniex.aihub.qualcomm.com"
 autoexamples = false
@@ -27,7 +27,7 @@ name = "geniex"
 [dependencies]
 
 [build-dependencies]
-bindgen = "0.72.1"
+bindgen = "0.73.2"
 
 [workspace]
 members = [

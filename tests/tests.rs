@@ -100,3 +100,101 @@ fn test_chat_session_history() {
     assert_eq!(dummy_history[0].role, "user");
     assert_eq!(dummy_history[0].content, "test message");
 }
+
+#[test]
+fn test_power_mode() {
+    assert_eq!(ModelConfig::default().power_mode, PowerMode::Burst);
+
+    // Resolving standard aliases
+    assert_eq!(
+        PowerMode::resolve("low_power_saver").unwrap(),
+        PowerMode::LowPowerSaver
+    );
+    assert_eq!(
+        PowerMode::resolve("power_saver").unwrap(),
+        PowerMode::PowerSaver
+    );
+    assert_eq!(
+        PowerMode::resolve("high_power_saver").unwrap(),
+        PowerMode::HighPowerSaver
+    );
+    assert_eq!(
+        PowerMode::resolve("low_balanced").unwrap(),
+        PowerMode::LowBalanced
+    );
+    assert_eq!(PowerMode::resolve("balanced").unwrap(), PowerMode::Balanced);
+    assert_eq!(
+        PowerMode::resolve("high_performance").unwrap(),
+        PowerMode::HighPerformance
+    );
+    assert_eq!(
+        PowerMode::resolve("sustained_high_performance").unwrap(),
+        PowerMode::SustainedHighPerformance
+    );
+    assert_eq!(PowerMode::resolve("burst").unwrap(), PowerMode::Burst);
+
+    // Resolving defaults and case insensitivity
+    assert_eq!(PowerMode::resolve("").unwrap(), PowerMode::Burst);
+    assert_eq!(PowerMode::resolve("default").unwrap(), PowerMode::Burst);
+    assert_eq!(PowerMode::resolve("  BURST  ").unwrap(), PowerMode::Burst);
+    assert_eq!(
+        PowerMode::resolve("Low_Balanced").unwrap(),
+        PowerMode::LowBalanced
+    );
+
+    // Error on invalid
+    assert!(PowerMode::resolve("invalid_mode").is_err());
+
+    // FromStr & Display
+    let parsed: PowerMode = "high_performance".parse().unwrap();
+    assert_eq!(parsed, PowerMode::HighPerformance);
+    assert_eq!(parsed.to_string(), "high_performance");
+}
+
+#[test]
+fn test_vlm_prefix_reuse_failed_error() {
+    let err = GeniexError::from_i32(-201202);
+    assert_eq!(err, GeniexError::VlmPrefixReuseFailed);
+    assert!(!err.message().is_empty());
+}
+
+#[test]
+fn test_log_level_and_qairt_runtime_path() {
+    // Calling before init should succeed
+    let res = set_log_level(LogLevel::Info);
+    assert!(res.is_ok());
+
+    let initial = get_qairt_runtime_path();
+    assert_eq!(initial, "");
+
+    let res = set_qairt_runtime_path(Some("custom/qairt/lib"));
+    assert!(res.is_ok());
+    assert_eq!(get_qairt_runtime_path(), "custom/qairt/lib");
+
+    // Resetting back to bundled
+    let res = set_qairt_runtime_path(None);
+    assert!(res.is_ok());
+    assert_eq!(get_qairt_runtime_path(), "");
+}
+
+#[test]
+fn test_vlm_create_options_and_score_output() {
+    let cfg = ModelConfig::default();
+    let options = VlmCreateOptions {
+        model_path: "model.gguf",
+        plugin_id: "llama_cpp",
+        config: &cfg,
+        mmproj_path: Some("mmproj.gguf"),
+        tokenizer_path: None,
+        device_id: Some("npu"),
+        vit_device_id: Some("gpu"),
+    };
+    assert_eq!(options.vit_device_id, Some("gpu"));
+
+    let score = ScoreOutput {
+        logits: vec![1.5, -0.5],
+        input_tokens: 12,
+    };
+    assert_eq!(score.logits.len(), 2);
+    assert_eq!(score.input_tokens, 12);
+}

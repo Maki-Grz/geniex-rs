@@ -39,8 +39,14 @@ Pass the path to a GGUF model file to run text generation:
 cargo run -p geniex-rust-example -- path/to/model.gguf
 ```
 
-### 3. Example 
+### 3. Example with Local GGUF Model
 ```bash
+# Windows PowerShell
 $env:CARGO_GENIEX_LIB_DIR="C:\Users\mini\Projects\GenieX\sdk\pkg-geniex\lib"
-cargo run -p geniex-rust-example -- C:\Users\mini\.cache\huggingface\hub\models--Qwen--Qwen2.5-0.5B-Instruct-GGUF\snapshots\9217f5db79a29953eb74d5343926648285ec7e67\qwen2.5-0.5b-instruct-q4_k_m.gguf
+cargo run -p geniex-rust-example -- "C:\Users\mini\.cache\huggingface\hub\models--Qwen--Qwen2.5-0.5B-Instruct-GGUF\snapshots\9217f5db79a29953eb74d5343926648285ec7e67\qwen2.5-0.5b-instruct-q4_k_m.gguf"
+```
+
+### 4. OpenAI-Compatible API Server (Axum 0.8)
+```bash
+cargo run -p geniex-rust-example --bin openai_server -- path/to/model.gguf
 ```

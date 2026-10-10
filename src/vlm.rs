@@ -1,6 +1,8 @@
 use crate::error::{GeniexError, Result};
 use crate::ffi;
-use crate::types::{GenerationConfig, ModelConfig, ProfileData, VlmCapabilities, VlmChatMessage};
+use crate::types::{
+    GenerationConfig, ModelConfig, ProfileData, VlmCapabilities, VlmChatMessage, VlmCreateOptions,
+};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::ptr;
@@ -16,28 +18,30 @@ unsafe impl Send for Vlm {}
 unsafe impl Sync for Vlm {}
 
 impl Vlm {
-    /// Creates a new VLM instance from a multimodal model file and projector weights.
-    pub fn create(
-        model_path: &str,
-        plugin_id: &str,
-        config: &ModelConfig,
-        mmproj_path: Option<&str>,
-        tokenizer_path: Option<&str>,
-        device_id: Option<&str>,
-    ) -> Result<Self> {
-        let c_model_path = CString::new(model_path).map_err(|_| GeniexError::CommonInvalidInput)?;
-        let c_plugin_id = CString::new(plugin_id).map_err(|_| GeniexError::CommonInvalidInput)?;
-        let c_mmproj_path = mmproj_path
+    /// Creates a new VLM instance using [`VlmCreateOptions`].
+    pub fn create_with_options(options: &VlmCreateOptions) -> Result<Self> {
+        let c_model_path =
+            CString::new(options.model_path).map_err(|_| GeniexError::CommonInvalidInput)?;
+        let c_plugin_id =
+            CString::new(options.plugin_id).map_err(|_| GeniexError::CommonInvalidInput)?;
+        let c_mmproj_path = options
+            .mmproj_path
             .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
             .transpose()?;
-        let c_tokenizer_path = tokenizer_path
+        let c_tokenizer_path = options
+            .tokenizer_path
             .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
             .transpose()?;
-        let c_device_id = device_id
+        let c_device_id = options
+            .device_id
+            .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
+            .transpose()?;
+        let c_vit_device_id = options
+            .vit_device_id
             .map(|s| CString::new(s).map_err(|_| GeniexError::CommonInvalidInput))
             .transpose()?;
 
-        let raw_config = config.to_raw();
+        let raw_config = options.config.to_raw();
 
         let raw_input = ffi::geniex_VlmCreateInput {
             model_path: c_model_path.as_ptr(),
@@ -45,6 +49,7 @@ impl Vlm {
             config: raw_config.raw,
             plugin_id: c_plugin_id.as_ptr(),
             device_id: c_device_id.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+            vit_device_id: c_vit_device_id.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
             tokenizer_path: c_tokenizer_path
                 .as_ref()
                 .map_or(ptr::null(), |s| s.as_ptr()),
@@ -60,6 +65,26 @@ impl Vlm {
         } else {
             Ok(Self { handle })
         }
+    }
+
+    /// Creates a new VLM instance from a multimodal model file and projector weights.
+    pub fn create(
+        model_path: &str,
+        plugin_id: &str,
+        config: &ModelConfig,
+        mmproj_path: Option<&str>,
+        tokenizer_path: Option<&str>,
+        device_id: Option<&str>,
+    ) -> Result<Self> {
+        Self::create_with_options(&VlmCreateOptions {
+            model_path,
+            plugin_id,
+            config,
+            mmproj_path,
+            tokenizer_path,
+            device_id,
+            vit_device_id: None,
+        })
     }
 
     /// Resets the internal state of the VLM.
